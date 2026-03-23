@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>RC Car Controller</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #1a1a2e;
+    color: #eee;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100dvh;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    width: 100%;
+    max-width: 400px;
+  }
+  .status {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #e74c3c;
+    flex-shrink: 0;
+  }
+  .status.connected { background: #2ecc71; }
+  .header button {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    cursor: pointer;
+    background: #0f3460;
+    color: #eee;
+  }
+  .header button:active { background: #16213e; }
+  .header button:disabled { opacity: 0.4; cursor: default; }
+  .joystick-area {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+  }
+  canvas { touch-action: none; }
+  .debug {
+    padding: 12px;
+    font-size: 20px;
+    font-family: monospace;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="status" id="status"></div>
+  <button id="connectBtn">Connect</button>
+  <button id="disconnectBtn" disabled>Disconnect</button>
+</div>
+
+<div class="joystick-area">
+  <canvas id="joystick" width="280" height="280"></canvas>
+</div>
+
+<div class="debug" id="debug">X: 0 Y: 0</div>
+
+<script>
+// --- BLE ---
+const NUS_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const NUS_RX_UUID      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+
+let device = null;
+let rxChar = null;
+let sendInterval = null;
+
+const statusEl = document.getElementById('status');
+const connectBtn = document.getElementById('connectBtn');
+const disconnectBtn = document.getElementById('disconnectBtn');
+
+connectBtn.addEventListener('click', async () => {
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [NUS_SERVICE_UUID] }]
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(NUS_SERVICE_UUID);
+    rxChar = await service.getCharacteristic(NUS_RX_UUID);
+    onConnected();
+  } catch (e) {
+    console.error(e);
+  }
+});
+
+disconnectBtn.addEventListener('click', () => {
+  if (device && device.gatt.connected) {
+    device.gatt.disconnect();
+  }
+});
+
+function onConnected() {
+  statusEl.classList.add('connected');
+  connectBtn.disabled = true;
+  disconnectBtn.disabled = false;
+  startSending();
+}
+
+function onDisconnected() {
+  statusEl.classList.remove('connected');
+  connectBtn.disabled = false;
+  disconnectBtn.disabled = true;
+  rxChar = null;
+  stopSending();
+}
+
+function startSending() {
+  stopSending();
+  sendInterval = setInterval(() => {
+    if (rxChar) {
+      const data = new Int8Array([joyX, joyY]);
+      rxChar.writeValueWithoutResponse(data).catch(() => {});
+    }
+  }, 100);
+}
+
+function stopSending() {
+  if (sendInterval) {
+    clearInterval(sendInterval);
+    sendInterval = null;
+  }
+}
+
+// --- Joystick ---
+const canvas = document.getElementById('joystick');
+const ctx = canvas.getContext('2d');
+const debugEl = document.getElementById('debug');
+
+const SIZE = 280;
+const CENTER = SIZE / 2;
+const OUTER_R = 120;
+const KNOB_R = 36;
+
+let joyX = 0;
+let joyY = 0;
+let knobX = CENTER;
+let knobY = CENTER;
+let dragging = false;
+
+function draw() {
+  ctx.clearRect(0, 0, SIZE, SIZE);
+  // Outer circle
+  ctx.beginPath();
+  ctx.arc(CENTER, CENTER, OUTER_R, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  // Cross lines
+  ctx.beginPath();
+  ctx.moveTo(CENTER - OUTER_R, CENTER);
+  ctx.lineTo(CENTER + OUTER_R, CENTER);
+  ctx.moveTo(CENTER, CENTER - OUTER_R);
+  ctx.lineTo(CENTER, CENTER + OUTER_R);
+  ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  // Knob
+  ctx.beginPath();
+  ctx.arc(knobX, knobY, KNOB_R, 0, Math.PI * 2);
+  ctx.fillStyle = dragging ? 'rgba(46,204,113,0.8)' : 'rgba(255,255,255,0.5)';
+  ctx.fill();
+}
+
+function updateJoy(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  let dx = clientX - rect.left - CENTER;
+  let dy = clientY - rect.top - CENTER;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist > OUTER_R) {
+    dx = dx / dist * OUTER_R;
+    dy = dy / dist * OUTER_R;
+  }
+  knobX = CENTER + dx;
+  knobY = CENTER + dy;
+  joyX = Math.round(dx / OUTER_R * 100);
+  joyY = Math.round(-dy / OUTER_R * 100); // Canvas Y is inverted
+  debugEl.textContent = `X: ${joyX} Y: ${joyY}`;
+  draw();
+}
+
+function resetJoy() {
+  knobX = CENTER;
+  knobY = CENTER;
+  joyX = 0;
+  joyY = 0;
+  dragging = false;
+  debugEl.textContent = 'X: 0 Y: 0';
+  draw();
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  dragging = true;
+  canvas.setPointerCapture(e.pointerId);
+  updateJoy(e.clientX, e.clientY);
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  updateJoy(e.clientX, e.clientY);
+});
+
+canvas.addEventListener('pointerup', () => resetJoy());
+canvas.addEventListener('pointercancel', () => resetJoy());
+
+draw();
+</script>
+</body>
+</html>
