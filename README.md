@@ -41,6 +41,8 @@ Use the [PicoRuby Terminal](https://picoruby.org/terminal) to write the firmware
 3. Click the **Connect** button to pair with the RC car via BLE
 4. Drag the joystick knob to drive!
 
+> **Note:** Safari on iPhone does not support the Web Bluetooth API. To control the RC car from an iPhone, use a Web Bluetooth compatible browser such as [Bluefy](https://apps.apple.com/app/bluefy-web-ble-browser/id1492822055).
+
 <img src="img/rc_car_movie.gif" width="480">
 
 ## License
